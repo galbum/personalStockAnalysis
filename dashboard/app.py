@@ -18,10 +18,12 @@ from dotenv import load_dotenv
 from analysis import PILLARS, build_analysis
 import cache
 from charts import line_chart, peer_bar
+import config
 from data_provider import fetch_company, fetch_price_performance
 from infographic import build_infographic
 from infographic_data import build_spec
 import llm
+from utils import fmt_money, fmt_num
 
 load_dotenv()
 
@@ -31,7 +33,8 @@ st.set_page_config(
     layout="wide",
 )
 
-VERDICT_COLORS = {"Strong": "#1a7f37", "Adequate": "#9a6700", "Weak": "#b42318"}
+VERDICT_COLORS = config.VERDICT_COLORS
+SCORE_COLORS = config.SCORE_COLORS
 PILLAR_LABELS = {
     "profitability": "Profitability",
     "valuation": "Valuation",
@@ -39,8 +42,6 @@ PILLAR_LABELS = {
     "financial_health": "Financial Health",
     "forward_signals": "Forward Signals",
 }
-SCORE_COLORS = {"strong": "#1a7f37", "safe": "#1a7f37", "middling": "#9a6700",
-                "grey": "#9a6700", "weak": "#b42318", "distress": "#b42318"}
 
 
 # --------------------------------------------------------------------------- #
@@ -69,27 +70,14 @@ def fetch_full(ticker: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Formatting helpers
+# Badges (fmt_money / fmt_num come from utils)
 # --------------------------------------------------------------------------- #
-def fmt_money(v, currency=""):
-    if v is None:
-        return "n/a"
-    for unit, label in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
-        if abs(v) >= unit:
-            return f"{currency}{v / unit:.2f}{label}"
-    return f"{currency}{v:,.2f}"
-
-
-def fmt_num(v, suffix=""):
-    return "n/a" if v is None else f"{v:,.2f}{suffix}"
-
-
 def verdict_badge(label, verdict):
-    color = VERDICT_COLORS.get(verdict, "#57606a")
+    color = VERDICT_COLORS.get(verdict, config.NEUTRAL)
     st.markdown(
         f"<div style='text-align:center;padding:10px 6px;border-radius:10px;"
         f"background:{color}1a;border:1px solid {color}55;'>"
-        f"<div style='font-size:0.8rem;color:#9aa0a6;'>{label}</div>"
+        f"<div style='font-size:0.8rem;color:{config.LABEL_MUTED};'>{label}</div>"
         f"<div style='font-size:1.05rem;font-weight:700;color:{color};'>{verdict}</div>"
         f"</div>",
         unsafe_allow_html=True,
@@ -97,13 +85,13 @@ def verdict_badge(label, verdict):
 
 
 def score_badge(label, value, sub, key):
-    color = SCORE_COLORS.get(str(key).lower(), "#57606a")
+    color = SCORE_COLORS.get(str(key).lower(), config.NEUTRAL)
     st.markdown(
         f"<div style='text-align:center;padding:10px 6px;border-radius:10px;"
         f"background:{color}1a;border:1px solid {color}55;'>"
-        f"<div style='font-size:0.8rem;color:#9aa0a6;'>{label}</div>"
+        f"<div style='font-size:0.8rem;color:{config.LABEL_MUTED};'>{label}</div>"
         f"<div style='font-size:1.3rem;font-weight:700;color:{color};'>{value}</div>"
-        f"<div style='font-size:0.72rem;color:#9aa0a6;'>{sub}</div>"
+        f"<div style='font-size:0.72rem;color:{config.LABEL_MUTED};'>{sub}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -344,10 +332,16 @@ def run_research(ticker, manual_comps, api_key, model, use_llm):
                 st.error(f"Could not find usable data for '{ticker}'. Check the symbol.")
                 return
 
+            # Persist the company bundle to the durable per-ticker store so the
+            # data (and its long-lived history) is reusable across sessions.
+            cache.save_data(ticker, target)
             cstat = cache.cache_status(ticker)
             if cstat.get("exists"):
                 when = (cstat.get("fetched_at") or "")[:19].replace("T", " ")
-                st.write(f"Cache: {ticker} last fetched {when} UTC")
+                depth = cstat.get("history_depth")
+                n = cstat.get("fetch_count")
+                extra = f" · {depth}q history · seen {n}x" if depth else ""
+                st.write(f"Cache: {ticker} last fetched {when} UTC{extra}")
 
             comps = manual_comps
             if not comps and use_llm and api_key:
@@ -368,6 +362,7 @@ def run_research(ticker, manual_comps, api_key, model, use_llm):
                     st.warning(f"LLM narrative failed ({e}). Showing data-only results.")
             status.update(label=f"{ticker} analysis ready", state="complete", expanded=False)
 
+        cache.record_search("research", [ticker], {"competitors": comps})
         st.session_state["last_research"] = (analysis, narrative)
         render(analysis, narrative)
     except Exception as e:  # noqa: BLE001
@@ -408,10 +403,14 @@ def run_infographic(primary, compare, api_key, model, use_llm, force, brand, han
                     pass
 
             st.write("Rendering infographic…")
-            spec = build_spec(bundles, period=period, brand=brand or "Gabi Album", handle=handle or "")
-            key = "_".join(b.get("ticker", "X") for b in bundles)
+            spec = build_spec(bundles, period=period, brand=brand or config.BRAND, handle=handle or "")
+            bundle_tickers = [b.get("ticker", "X") for b in bundles]
+            key = "_".join(bundle_tickers)
             out_path = str(cache.infographic_path(key))
             build_infographic(spec, out_path)
+            cache.register_infographic(key, bundle_tickers, period=period,
+                                       brand=brand or config.BRAND, path=out_path)
+            cache.record_search("infographic", bundle_tickers, {"period": period})
             status.update(label="Infographic ready", state="complete", expanded=False)
 
         alt = "Stock comparison infographic: " + " vs ".join(b.get("ticker", "?") for b in bundles)
@@ -437,18 +436,39 @@ def main():
             help="Needed for the analyst narrative & deck prompt, and competitor auto-pick.",
         )
         model = st.text_input(
-            "Claude model", value=os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
+            "Claude model", value=config.DEFAULT_MODEL,
             help="Use a model your key supports.",
         )
         use_llm = st.toggle("Use Claude (narrative / auto-pick)", value=bool(api_key))
         st.divider()
         st.subheader("Infographic branding")
-        brand = st.text_input("Brand footer", value="Gabi Album")
+        brand = st.text_input("Brand footer", value=config.BRAND)
         handle = st.text_input("Handle / period (right footer)", value="")
         st.divider()
         deep = "on" if os.environ.get("FMP_API_KEY") else "off (set FMP_API_KEY for 5y history)"
         st.caption(f"Data: TradingView + yfinance, cached 24h. Deep history (FMP): {deep}. "
                    "Narrative: your Anthropic key.")
+
+        st.divider()
+        with st.expander("History & saved", expanded=False):
+            searches = cache.recent_searches(limit=10)
+            if searches:
+                st.caption("Recent searches")
+                for ev in searches:
+                    icon = "📈" if ev.get("kind") == "research" else "🖼️"
+                    label = " / ".join(ev.get("tickers", [])) or "?"
+                    when = (ev.get("ts") or "")[:16].replace("T", " ")
+                    st.write(f"{icon} **{label}** · {when}")
+            else:
+                st.caption("No searches recorded yet.")
+
+            infos = cache.recent_infographics(limit=6)
+            if infos:
+                st.caption("Saved infographics")
+                for e in infos:
+                    st.write(f"🖼️ {' vs '.join(e.get('tickers', []))}"
+                             + (f" · {e['period']}" if e.get("period") else "")
+                             + (f" · x{e['count']}" if e.get("count", 0) > 1 else ""))
 
     mode = st.radio("Mode", ["Research (single ticker)", "Infographic (compare tickers)"],
                     horizontal=True, key="mode")
@@ -482,6 +502,17 @@ def main():
         compare = c2.text_input("Compare with (optional)", placeholder="e.g. MSFT", key="info_compare").strip().upper()
         period = st.text_input("Period label (footer)", placeholder="e.g. Q2'26", key="info_period").strip()
         force = st.checkbox("Force refresh (ignore cache)", value=False, key="info_force")
+
+        if primary:
+            saved = cache.infographics_for_ticker(primary)
+            if saved:
+                with st.expander(f"Previously generated for {primary} ({len(saved)})", expanded=False):
+                    for e in saved[:6]:
+                        st.image(e["path"], use_container_width=True,
+                                 caption=f"{' vs '.join(e['tickers'])}"
+                                         + (f" · {e['period']}" if e.get("period") else "")
+                                         + f" · {(e.get('updated_at') or '')[:10]}")
+
         run = st.button("Generate infographic", type="primary", disabled=not primary)
         if not run:
             st.info("Enter one ticker for a single-company infographic, or two for a "

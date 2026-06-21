@@ -13,7 +13,8 @@ First stage of the dashboard pipeline: get a ticker's data and cache it.
   `annual_labels`, `revenue_annual`, `rev_yoy_annual`, `net_margin_annual`,
   `fcf_annual`, `capex_growth_annual`, `total_debt_annual`. Use annual (YoY) for
   growth panels and quarterly (QoQ) for level panels.
-- **Cache:** `dashboard/cache/data/<TICKER>.json`, reused for 24h (`dashboard/cache.py`).
+- **Cache:** durable per-ticker store `dashboard/cache/tickers/<TICKER>/latest.json`
+  (reused for 24h, long-lived series history-merged across fetches) via `dashboard/cache.py`.
 
 ## Quick start
 

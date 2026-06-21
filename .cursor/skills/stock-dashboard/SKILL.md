@@ -49,13 +49,24 @@ ticker -> [fetch-stock-data] cache check (24h) + TradingView/yfinance
        -> cache results
 ```
 
-## Caching
+## Caching & history
 
-- `dashboard/cache/data/<TICKER>.json` — metrics + `fetched_at`
-- `dashboard/cache/infographics/<KEY>.png` — generated images
+Durable store under `dashboard/cache/`:
 
-Re-requests reuse the cache when younger than 24h. Use the **Force refresh**
-checkbox to bypass it and re-fetch.
+- `tickers/<TICKER>/latest.json` — newest bundle + metadata (`first_seen`, `fetch_count`, `history_depth`)
+- `tickers/<TICKER>/snapshots.jsonl` — append-only price/valuation snapshot per fetch
+- `infographics/<KEY>.png` + `infographics/index.json` — images + registry (tickers, period, brand, regen count)
+- `history/events.jsonl` — append-only log of research / infographic requests
+
+Behavior:
+- Re-requests reuse `latest.json` while younger than 24h; **Force refresh** bypasses it.
+- **History-merging:** period-keyed series (quarters/annual) are merged on every
+  save, so a later shallow fetch keeps deep history from an earlier FMP pull.
+  Scalars (price, multiples, scores) always come from the newest fetch.
+- Helpers: `cache.recent_tickers()`, `recent_searches()`, `recent_infographics()`,
+  `infographics_for_ticker()`, `snapshot_history()`. The sidebar **History & saved**
+  panel surfaces recent searches and saved infographics.
+- Reads legacy `cache/data/<TICKER>.json` as a fallback.
 
 ## Components
 
@@ -70,7 +81,7 @@ checkbox to bypass it and re-fetch.
 | `charts.py` | shared Plotly "equity" template (dark, last-point labels) |
 | `llm.py` | Claude narrative + deck prompt (reads `skills/fundamental-analysis`) |
 | `infographic.py`, `infographic_data.py` | spec assembly + matplotlib generator |
-| `cache.py` | local JSON/PNG cache + recent tickers |
+| `cache.py` | durable per-ticker store (history-merging) + infographic registry + search log |
 | `.streamlit/config.toml` | dark theme |
 
 ## Related skills

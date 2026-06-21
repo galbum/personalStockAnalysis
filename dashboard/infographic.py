@@ -35,10 +35,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
-BG = "#0a0a0a"
-FG = "#ffffff"
-MUTED = "#8a8a8a"
-DEFAULT_COLORS = ["#e8552d", "#ffffff", "#4c9be8", "#f0c419"]
+from config import (BG_DARK as BG, BRAND, DIVIDER, INFOGRAPHIC_COLORS as DEFAULT_COLORS,
+                    INFOGRAPHIC_FG as FG, MUTED, WHITE)  # noqa: E402
 
 
 def _nan(values):
@@ -67,7 +65,7 @@ def _draw_header(bgax, companies):
         bgax.text(0.50, 0.965, "x", color=MUTED, ha="center", va="center", fontsize=fs * 0.78)
         bgax.text(0.525, 0.965, b["name"].upper(), color=b.get("color", FG),
                   ha="left", va="center", fontsize=fs, fontweight="bold")
-    bgax.plot([0.05, 0.95], [0.93, 0.93], color="#2a2a2a", lw=1)
+    bgax.plot([0.05, 0.95], [0.93, 0.93], color=DIVIDER, lw=1)
 
 
 def _draw_top_stats(bgax, top_stats, companies):
@@ -84,9 +82,9 @@ def _draw_top_stats(bgax, top_stats, companies):
         elif len(vals) >= 2:
             bgax.text(cx - 0.012, 0.882, vals[0], color=colors[0], ha="right", va="center", fontsize=12)
             bgax.text(cx, 0.882, "x", color=MUTED, ha="center", va="center", fontsize=11)
-            bgax.text(cx + 0.012, 0.882, vals[1], color=colors[1] if colors[1] != "#ffffff" else FG,
+            bgax.text(cx + 0.012, 0.882, vals[1], color=colors[1] if colors[1] != WHITE else FG,
                       ha="left", va="center", fontsize=12)
-    bgax.plot([0.05, 0.95], [0.86, 0.86], color="#2a2a2a", lw=1)
+    bgax.plot([0.05, 0.95], [0.86, 0.86], color=DIVIDER, lw=1)
 
 
 def _draw_panel(ax, panel, companies):
@@ -163,8 +161,8 @@ def build_infographic(spec: dict, out_path: str) -> str:
         _draw_panel(ax, panel, companies)
 
     # Footer.
-    brand = spec.get("brand", "Gabi Album")
-    bgax.plot([0.05, 0.95], [0.055, 0.055], color="#2a2a2a", lw=1)
+    brand = spec.get("brand", BRAND)
+    bgax.plot([0.05, 0.95], [0.055, 0.055], color=DIVIDER, lw=1)
     bgax.text(0.05, 0.03, brand, color=FG, ha="left", va="center", fontsize=12, fontweight="bold")
     right = spec.get("handle") or spec.get("period") or ""
     if right:

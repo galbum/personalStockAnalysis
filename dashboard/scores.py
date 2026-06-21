@@ -9,15 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-
-def _num(v) -> Optional[float]:
-    try:
-        if v is None:
-            return None
-        f = float(v)
-        return f
-    except (TypeError, ValueError):
-        return None
+from utils import clean as _num
 
 
 def _safe_div(n, d) -> Optional[float]:

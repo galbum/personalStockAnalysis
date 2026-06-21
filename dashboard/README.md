@@ -81,8 +81,35 @@ competitors in the sidebar (otherwise Claude picks two), and click **Analyze**.
 | Charts | `charts.py` | Shared Plotly "equity" template (dark, last-point labels) |
 | Narrative | `llm.py` | Sends real data + skill files to Claude; returns thesis + deck prompt |
 | Infographic | `infographic.py`, `infographic_data.py` | Assembles the spec + renders the PNG (matplotlib) |
-| Cache | `cache.py` | Local JSON/PNG cache with 24h TTL + force refresh |
+| Cache | `cache.py` | Durable per-ticker store (history-merging), infographic registry, search log |
 | UI | `app.py` | Tabbed Streamlit dashboard: research mode + infographic mode |
+
+## Caching & history
+
+Everything fetched is persisted under `cache/` so repeat lookups are instant and
+the data stays usable later:
+
+```
+cache/
+  tickers/<TICKER>/
+    latest.json      # newest bundle + metadata (first_seen, fetch_count, history_depth)
+    snapshots.jsonl   # append-only price/valuation snapshot per fetch
+  infographics/
+    <KEY>.png         # rendered image
+    index.json        # registry: tickers, period, brand, created/updated, regen count
+  history/
+    events.jsonl      # append-only log of research / infographic requests
+```
+
+- **Reuse:** a ticker requested again serves the stored bundle while it's younger
+  than the 24h TTL; an expired entry or **Force refresh** re-fetches.
+- **History merging:** period-keyed series (quarterly/annual revenue, margins, FCF…)
+  never change once reported, so each save *merges* new periods into the stored
+  series. A later shallow fetch keeps the deeper history from an earlier FMP pull.
+- **Snapshots:** volatile fields (price, multiples) are appended each fetch, so a
+  price/valuation history builds up over time (`cache.snapshot_history(ticker)`).
+- **Records:** the sidebar **History & saved** panel lists recent searches and saved
+  infographics; the infographic mode previews ones already generated for a ticker.
 
 ## Notes & limits
 

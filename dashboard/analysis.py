@@ -10,7 +10,8 @@ import datetime as dt
 from statistics import median
 from typing import Optional
 
-from data_provider import fetch_many, latest
+from data_provider import fetch_many
+from utils import latest
 
 PILLARS = ["profitability", "valuation", "cash_flow", "financial_health", "forward_signals"]
 

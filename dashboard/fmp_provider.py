@@ -16,6 +16,8 @@ from typing import Optional
 
 import requests
 
+from utils import clean as _num, pct_change as _pct_change
+
 _BASE = "https://financialmodelingprep.com/api/v3"
 _TIMEOUT = 12
 
@@ -26,16 +28,6 @@ def api_key() -> Optional[str]:
 
 def available() -> bool:
     return bool(api_key())
-
-
-def _num(v) -> Optional[float]:
-    try:
-        if v is None or v == "":
-            return None
-        f = float(v)
-        return None if (f != f) else f  # NaN guard
-    except (TypeError, ValueError):
-        return None
 
 
 def _get(endpoint: str, ticker: str, period: str, limit: int) -> list:
@@ -185,10 +177,3 @@ def _margin(numer: list, denom: list) -> list:
     return out
 
 
-def _pct_change(series: list, lag: int) -> list:
-    out = [None] * len(series)
-    for i in range(lag, len(series)):
-        cur, prev = series[i], series[i - lag]
-        if cur is not None and prev not in (None, 0):
-            out[i] = round(100.0 * (cur - prev) / abs(prev), 2)
-    return out

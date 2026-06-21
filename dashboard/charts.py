@@ -12,19 +12,17 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
-PALETTE = ["#e8552d", "#ffffff", "#4c9be8", "#f0c419", "#9b59b6"]
-PEER_COLOR = "#4c9be8"
-TARGET_COLOR = "#e8552d"
-MEDIAN_COLOR = "#9b59b6"
+from config import (BG_DARK, CHART_PALETTE as PALETTE, GRID, MEDIAN_COLOR,
+                    PEER_COLOR, TARGET_COLOR, TEXT)
 
 pio.templates["equity"] = go.layout.Template(
     layout=dict(
-        paper_bgcolor="#0a0a0a",
-        plot_bgcolor="#0a0a0a",
-        font=dict(color="#f2f2f2", size=12),
+        paper_bgcolor=BG_DARK,
+        plot_bgcolor=BG_DARK,
+        font=dict(color=TEXT, size=12),
         colorway=PALETTE,
         xaxis=dict(showgrid=False, zeroline=False),
-        yaxis=dict(gridcolor="#222", zeroline=False),
+        yaxis=dict(gridcolor=GRID, zeroline=False),
         margin=dict(l=10, r=10, t=40, b=10),
         hovermode="x unified",
         legend=dict(orientation="h", y=1.06, x=0, bgcolor="rgba(0,0,0,0)"),

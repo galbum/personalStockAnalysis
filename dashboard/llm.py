@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from config import API_KEY_ENV
+
 SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "fundamental-analysis"
 
 SKILL_FILES = [
@@ -137,4 +139,4 @@ def generate_narrative(analysis: dict, model: str, api_key: str) -> dict:
 
 
 def get_api_key() -> Optional[str]:
-    return os.environ.get("ANTHROPIC_API_KEY")
+    return os.environ.get(API_KEY_ENV)

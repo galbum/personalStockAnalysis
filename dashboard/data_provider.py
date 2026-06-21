@@ -8,7 +8,6 @@ never a fabricated value -- consistent with the skill's sourcing discipline.
 """
 from __future__ import annotations
 
-import math
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Optional
@@ -16,7 +15,9 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 
-MAX_QUARTERS = 12
+from config import ANNUAL_YEARS, MAX_QUARTERS
+from utils import (cagr as _cagr, clean as _clean, latest, pct_change as _pct_change,
+                   pct_ratio as _pct, ttm as _ttm, yoy as _yoy)
 
 
 def _safe_snapshot(ticker: str) -> dict:
@@ -50,19 +51,6 @@ def fetch_many(tickers) -> list:
         return list(ex.map(fetch_company, uniq))
 
 
-def _clean(value) -> Optional[float]:
-    """Coerce to float or None (treats NaN/inf as missing)."""
-    if value is None:
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return f
-
-
 def _get_row(df: Optional[pd.DataFrame], *candidates: str) -> Optional[pd.Series]:
     """Return the first row whose index label matches any candidate.
 
@@ -94,40 +82,6 @@ def _series_to_list(row: Optional[pd.Series], columns) -> list:
         except Exception:
             out.append(None)
     return out
-
-
-def _pct(numerator, denominator) -> Optional[float]:
-    n, d = _clean(numerator), _clean(denominator)
-    if n is None or d in (None, 0):
-        return None
-    return round(100.0 * n / d, 2)
-
-
-def _pct_change(series: list, lag: int) -> list:
-    """Percent change vs `lag` periods earlier (lag=4 quarterly YoY, lag=1 annual YoY)."""
-    out = [None] * len(series)
-    for i in range(lag, len(series)):
-        cur, prev = series[i], series[i - lag]
-        if cur is not None and prev not in (None, 0):
-            out[i] = round(100.0 * (cur - prev) / abs(prev), 2)
-    return out
-
-
-def _yoy(series: list) -> list:
-    """Year-over-year % change for a quarterly series (period i vs i-4)."""
-    return _pct_change(series, 4)
-
-
-def _cagr(series):
-    """CAGR % over an annual series (oldest->newest). Returns (cagr_pct, years)."""
-    vals = [v for v in (series or []) if v is not None]
-    if len(vals) < 2:
-        return None, 0
-    yrs = len(vals) - 1
-    first, last = vals[0], vals[-1]
-    if first is None or first <= 0 or last <= 0:
-        return None, yrs
-    return round(((last / first) ** (1 / yrs) - 1) * 100, 1), yrs
 
 
 @lru_cache(maxsize=64)
@@ -311,14 +265,14 @@ def fetch_company(ticker: str) -> dict:
     except Exception:
         balance_a = None
 
-    a_cols = list(reversed(list(income_a.columns)[:5])) if (income_a is not None and not income_a.empty) else []
+    a_cols = list(reversed(list(income_a.columns)[:ANNUAL_YEARS])) if (income_a is not None and not income_a.empty) else []
     annual_labels = [pd.Timestamp(c).strftime("%Y") for c in a_cols]
     revenue_a = _series_to_list(_get_row(income_a, "Total Revenue", "Revenue"), a_cols)
     net_income_a = _series_to_list(_get_row(income_a, "Net Income", "Net Income Common Stockholders"), a_cols)
     net_margin_a = [_pct(net_income_a[i], revenue_a[i]) for i in range(len(a_cols))]
     rev_yoy_a = _pct_change(revenue_a, 1)
 
-    ca_cols = list(reversed(list(cashflow_a.columns)[:5])) if (cashflow_a is not None and not cashflow_a.empty) else []
+    ca_cols = list(reversed(list(cashflow_a.columns)[:ANNUAL_YEARS])) if (cashflow_a is not None and not cashflow_a.empty) else []
     ocf_a = _series_to_list(_get_row(cashflow_a, "Operating Cash Flow", "Total Cash From Operating Activities"), ca_cols)
     capex_a = _series_to_list(_get_row(cashflow_a, "Capital Expenditure", "Capital Expenditures"), ca_cols)
     fcf_a_row = _get_row(cashflow_a, "Free Cash Flow")
@@ -330,7 +284,7 @@ def fetch_company(ticker: str) -> dict:
     capex_growth_a = _pct_change([abs(x) if x is not None else None for x in capex_a], 1)
     annual_cf_labels = [pd.Timestamp(c).strftime("%Y") for c in ca_cols]
 
-    ba_cols = list(reversed(list(balance_a.columns)[:5])) if (balance_a is not None and not balance_a.empty) else []
+    ba_cols = list(reversed(list(balance_a.columns)[:ANNUAL_YEARS])) if (balance_a is not None and not balance_a.empty) else []
     annual_bs_labels = [pd.Timestamp(c).strftime("%Y") for c in ba_cols]
     total_debt_a = _series_to_list(_get_row(balance_a, "Total Debt"), ba_cols)
     shares_a = _series_to_list(_get_row(income_a, "Diluted Average Shares", "Basic Average Shares"), a_cols)
@@ -449,10 +403,6 @@ def fetch_company(ticker: str) -> dict:
         result["data_source"] = (result["data_source"] + "+fmp")
 
     # ---- SBC intensity (TTM = last 4 quarters) ----
-    def _ttm(series):
-        vals = [v for v in (series or [])[-4:] if v is not None]
-        return sum(vals) if len(vals) == 4 else None
-
     sbc_ttm = _ttm(result.get("sbc_series"))
     rev_ttm = _ttm(result.get("revenue"))
     fcf_ttm = _ttm(result.get("fcf"))
@@ -578,14 +528,6 @@ def _annual_inputs(result, hist, income_a, cashflow_a, balance_a, a_cols, ca_col
         "revenue": cur.get("revenue"),
     }
     return cur, prev, alt
-
-
-def latest(series: list):
-    """Last non-None value of a series, else None."""
-    for v in reversed(series or []):
-        if v is not None:
-            return v
-    return None
 
 
 @lru_cache(maxsize=64)
