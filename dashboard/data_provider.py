@@ -15,7 +15,7 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 
-MAX_QUARTERS = 8
+MAX_QUARTERS = 12
 
 
 def _clean(value) -> Optional[float]:
@@ -86,6 +86,18 @@ def _yoy(series: list) -> list:
     return _pct_change(series, 4)
 
 
+def _cagr(series):
+    """CAGR % over an annual series (oldest->newest). Returns (cagr_pct, years)."""
+    vals = [v for v in (series or []) if v is not None]
+    if len(vals) < 2:
+        return None, 0
+    yrs = len(vals) - 1
+    first, last = vals[0], vals[-1]
+    if first is None or first <= 0 or last <= 0:
+        return None, yrs
+    return round(((last / first) ** (1 / yrs) - 1) * 100, 1), yrs
+
+
 @lru_cache(maxsize=64)
 def fetch_company(ticker: str) -> dict:
     """Fetch and assemble a company's metric bundle. Cached per process."""
@@ -129,6 +141,9 @@ def fetch_company(ticker: str) -> dict:
     )
     ebitda_row = _get_row(income, "EBITDA", "Normalized EBITDA")
     ebitda = _series_to_list(ebitda_row, cols)
+    interest_expense = _series_to_list(
+        _get_row(income, "Interest Expense", "Interest Expense Non Operating"), cols
+    )
 
     def margins(numer):
         return [_pct(numer[i], revenue[i]) for i in range(len(cols))]
@@ -157,6 +172,16 @@ def fetch_company(ticker: str) -> dict:
             for i in range(len(cf_cols))
         ]
     fcf_margin = [_pct(fcf[i], revenue[i]) if i < len(revenue) else None for i in range(len(fcf))]
+    # Stock-based comp (a non-cash add-back that inflates OCF/FCF). SBC-adjusted
+    # FCF strips it out so buybacks-that-only-offset-dilution aren't mistaken for
+    # real shareholder return.
+    sbc_series = _series_to_list(_get_row(cashflow, "Stock Based Compensation"), cf_cols)
+    fcf_ex_sbc = [
+        (fcf[i] - sbc_series[i]) if (i < len(sbc_series) and fcf[i] is not None and sbc_series[i] is not None)
+        else None
+        for i in range(len(fcf))
+    ]
+    fcf_ex_sbc_margin = [_pct(fcf_ex_sbc[i], revenue[i]) if i < len(revenue) else None for i in range(len(fcf_ex_sbc))]
     ocf_to_ni = [
         round(ocf[i] / net_income[i], 2)
         if (i < len(net_income) and ocf[i] is not None and net_income[i] not in (None, 0))
@@ -270,6 +295,7 @@ def fetch_company(ticker: str) -> dict:
     ba_cols = list(reversed(list(balance_a.columns)[:5])) if (balance_a is not None and not balance_a.empty) else []
     annual_bs_labels = [pd.Timestamp(c).strftime("%Y") for c in ba_cols]
     total_debt_a = _series_to_list(_get_row(balance_a, "Total Debt"), ba_cols)
+    shares_a = _series_to_list(_get_row(income_a, "Diluted Average Shares", "Basic Average Shares"), a_cols)
 
     result = {
         "ticker": ticker,
@@ -296,6 +322,9 @@ def fetch_company(ticker: str) -> dict:
         "capex_growth": capex_growth,
         "fcf": fcf,
         "fcf_margin": fcf_margin,
+        "sbc_series": sbc_series,
+        "fcf_ex_sbc": fcf_ex_sbc,
+        "fcf_ex_sbc_margin": fcf_ex_sbc_margin,
         "ocf_to_ni": ocf_to_ni,
         # balance-sheet series (own quarter labels)
         "bs_quarters": bs_quarter_labels,
@@ -310,6 +339,7 @@ def fetch_company(ticker: str) -> dict:
         "annual_cf_labels": annual_cf_labels,
         "annual_bs_labels": annual_bs_labels,
         "total_debt_annual": total_debt_a,
+        "shares_annual": shares_a,
         # single-value head-to-head stats
         "dividend_yield": div_yield,
         "inst_ownership": inst_own,
@@ -360,7 +390,166 @@ def fetch_company(ticker: str) -> dict:
             result["roe"] = round(float(snap["roe"]), 2)
         result["data_source"] = "tradingview+yfinance"
 
+    # ---- Optional deep history (FMP) overlays the short yfinance series ----
+    hist = {}
+    try:
+        import fmp_provider
+
+        hist = fmp_provider.fetch_history(ticker)
+    except Exception:
+        hist = {}
+    if hist:
+        for key in ("quarters", "revenue", "rev_yoy", "gross_margin", "op_margin",
+                    "net_margin", "ebitda", "ebitda_margin", "net_income", "ocf",
+                    "capex", "fcf", "fcf_margin", "sbc_series", "capex_growth",
+                    "ocf_to_ni", "bs_quarters", "total_debt_series",
+                    "annual_labels", "revenue_annual", "rev_yoy_annual",
+                    "net_margin_annual", "fcf_annual", "capex_growth_annual",
+                    "annual_cf_labels", "annual_bs_labels", "total_debt_annual"):
+            if hist.get(key):
+                result[key] = hist[key]
+        # Recompute SBC-adjusted FCF on the (now deeper) FMP series.
+        f, sb, rev = result.get("fcf") or [], result.get("sbc_series") or [], result.get("revenue") or []
+        result["fcf_ex_sbc"] = [
+            (f[i] - sb[i]) if (i < len(sb) and f[i] is not None and sb[i] is not None) else None
+            for i in range(len(f))
+        ]
+        result["fcf_ex_sbc_margin"] = [
+            _pct(result["fcf_ex_sbc"][i], rev[i]) if i < len(rev) else None
+            for i in range(len(result["fcf_ex_sbc"]))
+        ]
+        result["data_source"] = (result["data_source"] + "+fmp")
+
+    # ---- SBC intensity (TTM = last 4 quarters) ----
+    def _ttm(series):
+        vals = [v for v in (series or [])[-4:] if v is not None]
+        return sum(vals) if len(vals) == 4 else None
+
+    sbc_ttm = _ttm(result.get("sbc_series"))
+    rev_ttm = _ttm(result.get("revenue"))
+    fcf_ttm = _ttm(result.get("fcf"))
+    result["sbc_ttm"] = sbc_ttm
+    result["sbc_pct_revenue"] = _pct(sbc_ttm, rev_ttm)
+    result["sbc_pct_fcf"] = _pct(sbc_ttm, fcf_ttm)
+    result["history_quarters"] = len([q for q in (result.get("quarters") or [])])
+
+    # ---- Solvency in cash-flow terms ----
+    ebitda_ttm = _ttm(ebitda)
+    ebit_ttm = _ttm(operating_income)
+    interest_ttm = _ttm([abs(x) if x is not None else None for x in interest_expense])
+    net_debt = (-result["net_cash"]) if result.get("net_cash") is not None else None
+    result["ebitda_ttm"] = ebitda_ttm
+    result["net_debt"] = net_debt
+    result["net_debt_to_ebitda"] = (
+        round(net_debt / ebitda_ttm, 2) if (net_debt is not None and ebitda_ttm not in (None, 0)) else None
+    )
+    result["interest_coverage"] = (
+        round(ebit_ttm / interest_ttm, 2) if (ebit_ttm is not None and interest_ttm not in (None, 0)) else None
+    )
+    # ---- FCF yield & Rule of 40 ----
+    result["fcf_yield"] = _pct(fcf_ttm, result.get("market_cap"))
+    rg, fm = latest(result.get("rev_yoy")), latest(result.get("fcf_margin"))
+    result["rule_of_40"] = round(rg + fm, 1) if (rg is not None and fm is not None) else None
+
+    # ---- Growth durability (CAGR over available annual history) ----
+    if hist.get("_annual_income", {}).get("shares"):
+        result["shares_annual"] = hist["_annual_income"]["shares"]
+    rev_cagr, rev_yrs = _cagr(result.get("revenue_annual"))
+    fcf_cagr, fcf_yrs = _cagr(result.get("fcf_annual"))
+    result["rev_cagr"], result["rev_cagr_years"] = rev_cagr, rev_yrs
+    result["fcf_cagr"], result["fcf_cagr_years"] = fcf_cagr, fcf_yrs
+
+    # ---- Per-share dilution & shareholder yield ----
+    sa = [v for v in (result.get("shares_annual") or []) if v is not None]
+    net_buyback_yield = (
+        round((sa[-2] - sa[-1]) / sa[-2] * 100, 2) if (len(sa) >= 2 and sa[-2] not in (None, 0)) else None
+    )
+    result["net_buyback_yield"] = net_buyback_yield
+    div = result.get("dividend_yield")
+    if div is not None or net_buyback_yield is not None:
+        result["shareholder_yield"] = round((div or 0) + (net_buyback_yield or 0), 2)
+    else:
+        result["shareholder_yield"] = None
+
+    # ---- Composite scores (Piotroski F, Altman Z) from annual figures ----
+    try:
+        import scores
+
+        cur, prev, alt = _annual_inputs(result, hist, income_a, cashflow_a, balance_a,
+                                        a_cols, ca_cols, ba_cols)
+        result["piotroski"] = scores.piotroski(cur, prev)
+        result["altman"] = scores.altman_z(alt)
+    except Exception:
+        result["piotroski"] = None
+        result["altman"] = None
+
     return result
+
+
+def _list_at(lst, back=0):
+    if not lst or len(lst) <= back:
+        return None
+    return lst[-1 - back]
+
+
+def _annual_inputs(result, hist, income_a, cashflow_a, balance_a, a_cols, ca_cols, ba_cols):
+    """Assemble current/prior-year figures for the composite scores.
+
+    Prefers FMP annual lists when present (deeper, cleaner), else reads the
+    yfinance annual statement DataFrames. Returns (cur, prev, altman_inputs).
+    """
+    def acol(df, cols, names, back):
+        if not cols or len(cols) <= back:
+            return None
+        row = _get_row(df, *names)
+        return None if row is None else _clean(row.get(cols[-1 - back]))
+
+    fi = hist.get("_annual_income") or {}
+    fc = hist.get("_annual_cf") or {}
+    fb = hist.get("_annual_bs") or {}
+
+    def pick(fmp_list, df, names, back):
+        if fmp_list:
+            return _list_at(fmp_list, back)
+        return acol(df, names_cols(df), names, back)
+
+    def names_cols(df):  # choose the right oldest->newest column set per statement
+        if df is balance_a:
+            return ba_cols
+        if df is cashflow_a:
+            return ca_cols
+        return a_cols
+
+    def build(back):
+        return {
+            "net_income": pick(fi.get("net_income"), income_a, ("Net Income", "Net Income Common Stockholders"), back),
+            "gross_profit": pick(fi.get("gross_profit"), income_a, ("Gross Profit",), back),
+            "revenue": pick(fi.get("revenue"), income_a, ("Total Revenue", "Revenue"), back),
+            "shares": pick(fi.get("shares"), income_a, ("Diluted Average Shares", "Basic Average Shares"), back),
+            "ocf": pick(fc.get("ocf"), cashflow_a, ("Operating Cash Flow", "Total Cash From Operating Activities"), back),
+            "total_assets": pick(fb.get("total_assets"), balance_a, ("Total Assets",), back),
+            "current_assets": pick(fb.get("current_assets"), balance_a, ("Current Assets", "Total Current Assets"), back),
+            "current_liab": pick(fb.get("current_liab"), balance_a, ("Current Liabilities", "Total Current Liabilities"), back),
+            "long_term_debt": pick(fb.get("long_term_debt"), balance_a, ("Long Term Debt",), back),
+        }
+
+    cur, prev = build(0), build(1)
+
+    re_ = pick(fb.get("retained_earnings"), balance_a, ("Retained Earnings",), 0)
+    tl_ = pick(fb.get("total_liabilities"), balance_a, ("Total Liabilities Net Minority Interest", "Total Liabilities"), 0)
+    ebit = pick(fi.get("ebit"), income_a, ("EBIT", "Operating Income", "Operating Income Or Loss"), 0)
+    ca, cl = cur.get("current_assets"), cur.get("current_liab")
+    wc = (ca - cl) if (ca is not None and cl is not None) else None
+    alt = {
+        "working_capital": wc,
+        "total_assets": cur.get("total_assets"),
+        "retained_earnings": re_,
+        "ebit": ebit,
+        "market_cap": result.get("market_cap"),
+        "total_liabilities": tl_,
+        "revenue": cur.get("revenue"),
+    }
+    return cur, prev, alt
 
 
 def latest(series: list):

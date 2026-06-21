@@ -6,16 +6,20 @@ An interactive Streamlit dashboard with two modes.
 
 Enter a ticker, click **Analyze**, and it:
 
-1. Pulls **real fundamentals** from yfinance for the company and two competitors
+1. Pulls **real fundamentals** from TradingView + yfinance (and **FMP** for deep
+   history when `FMP_API_KEY` is set) for the company and competitors
 2. Computes the [`fundamental-analysis`](../skills/fundamental-analysis) skill's
    **five pillars** (Profitability, Valuation, Cash Flow, Financial Health,
-   Forward Signals) with trends and peer comparisons
-3. (Optional) Has **Claude** read the skill's own instruction files and the real
+   Forward Signals) plus **Piotroski F-score** and **Altman Z-score**
+3. Surfaces analyst metrics: **SBC-adjusted FCF**, FCF yield, Rule of 40,
+   net debt/EBITDA, interest coverage, revenue/FCF CAGR, and shareholder yield
+4. (Optional) Has **Claude** read the skill's own instruction files and the real
    data, then write the analyst interpretation, verdicts, investment thesis, and a
    ready-to-paste **Claude Design deck prompt**
 
-It's a **hybrid engine**: real numbers from market data + analyst-grade narrative
-from the LLM. Without an Anthropic key it still runs in **data-only mode**.
+A tabbed, dark-themed UI (Overview / Pillars / Thesis / Deck prompt) with staged
+progress and cached fetches. It's a **hybrid engine**: real numbers + analyst-grade
+narrative from the LLM. Without an Anthropic key it still runs in **data-only mode**.
 
 ### Infographic (compare)
 
@@ -69,18 +73,23 @@ competitors in the sidebar (otherwise Claude picks two), and click **Analyze**.
 
 | Layer | File | Role |
 |-------|------|------|
-| Data | `data_provider.py` | yfinance fetch + metric extraction (defensive, never fabricates) |
+| Data | `data_provider.py` | TradingView + yfinance fetch + metrics + composite scores |
+| Deep history | `fmp_provider.py` | Optional FMP (8-12 quarters + ~5y); no-key fallback |
+| Snapshot | `tv_provider.py` | TradingView valuation/snapshot (no key) |
+| Scores | `scores.py` | Piotroski F-score + Altman Z-score (pure functions) |
 | Analysis | `analysis.py` | Builds the five pillars + rule-based preliminary verdicts |
+| Charts | `charts.py` | Shared Plotly "equity" template (dark, last-point labels) |
 | Narrative | `llm.py` | Sends real data + skill files to Claude; returns thesis + deck prompt |
 | Infographic | `infographic.py`, `infographic_data.py` | Assembles the spec + renders the PNG (matplotlib) |
 | Cache | `cache.py` | Local JSON/PNG cache with 24h TTL + force refresh |
-| UI | `app.py` | Streamlit dashboard: research mode + infographic mode |
+| UI | `app.py` | Tabbed Streamlit dashboard: research mode + infographic mode |
 
 ## Notes & limits
 
-- **Data source:** yfinance is free and unofficial; figures can lag or differ in
-  methodology from primary filings. "Peer median" is the median of the **shown
-  peers only**, not a full sector median. Verify against 10-K/10-Q before acting.
+- **Data source:** TradingView + yfinance are free/unofficial; figures can lag or
+  differ from primary filings. Without `FMP_API_KEY` history is ~5 quarters (the
+  UI labels the depth). "Peer median" is the median of the **shown peers only**,
+  not a full sector median. Verify against 10-K/10-Q before acting.
 - **Forward signals** (guidance, revisions, buybacks, insider activity) are
   partially available via yfinance; gaps show as `n/a`.
 - **Not investment advice.** Educational research only.

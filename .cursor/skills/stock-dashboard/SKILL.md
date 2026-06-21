@@ -7,9 +7,14 @@ description: Run and operate the local Streamlit stock-analysis dashboard that t
 
 Local Streamlit app in `dashboard/` with two modes:
 
-- **Research (single ticker):** five-pillar fundamental analysis + Claude thesis
-  + a ready-to-paste Claude Design deck prompt.
+- **Research (single ticker):** five-pillar fundamental analysis + Piotroski
+  F-score & Altman Z-score + Claude thesis + a Claude Design deck prompt.
+  Tabbed layout (Overview / Pillars / Thesis / Deck prompt) on a dark theme.
 - **Infographic (compare):** head-to-head PNG infographic for 1-2 tickers.
+
+The Overview surfaces FCF yield, Rule of 40, net debt/EBITDA, interest coverage,
+revenue/FCF CAGR, and shareholder yield; the Cash Flow pillar shows SBC-adjusted
+FCF (FCF ex-SBC) alongside raw FCF.
 
 ## Run
 
@@ -22,6 +27,8 @@ streamlit run app.py
 
 Open http://localhost:8501. Set the Anthropic API key in the sidebar (or in a
 `.env` file) to enable the narrative, deck prompt, and competitor auto-pick.
+Set `FMP_API_KEY` in `.env` for deep history (8-12 quarters + ~5 fiscal years);
+without it the app falls back to yfinance (~5 quarters) and labels the depth.
 
 ## Pipeline stages (each has its own skill)
 
@@ -54,12 +61,17 @@ checkbox to bypass it and re-fetch.
 
 | File | Role |
 |------|------|
-| `app.py` | UI + orchestration (modes, caching, rendering) |
-| `data_provider.py` | yfinance fetch + metric extraction |
+| `app.py` | Tabbed UI + orchestration (modes, caching, `st.status`, rendering) |
+| `data_provider.py` | TradingView + yfinance fetch + metric extraction + scores |
+| `fmp_provider.py` | Optional FMP deep history (graceful no-key fallback) |
+| `tv_provider.py` | TradingView snapshot/valuation (no key) |
+| `scores.py` | Piotroski F-score + Altman Z-score (pure functions) |
 | `analysis.py` | five-pillar assembly + rule-based verdicts |
+| `charts.py` | shared Plotly "equity" template (dark, last-point labels) |
 | `llm.py` | Claude narrative + deck prompt (reads `skills/fundamental-analysis`) |
 | `infographic.py`, `infographic_data.py` | spec assembly + matplotlib generator |
-| `cache.py` | local JSON/PNG cache |
+| `cache.py` | local JSON/PNG cache + recent tickers |
+| `.streamlit/config.toml` | dark theme |
 
 ## Related skills
 

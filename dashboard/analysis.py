@@ -46,7 +46,7 @@ def _resolve_metric(company, key):
     """Return a latest scalar for a metric key (series -> latest, else field)."""
     series_keys = {
         "rev_yoy", "gross_margin", "op_margin", "net_margin", "ebitda_margin",
-        "fcf_margin", "ocf_to_ni",
+        "fcf_margin", "fcf_ex_sbc_margin", "ocf_to_ni",
     }
     if key in series_keys:
         return latest(company.get(key))
@@ -71,6 +71,12 @@ def build_analysis(target_ticker: str, competitor_tickers: list) -> dict:
             "summary": target["summary"],
         },
         "competitors": [c["ticker"] for c in comps],
+        "scores": {
+            "piotroski": target.get("piotroski"),
+            "altman": target.get("altman"),
+        },
+        "data_source": target.get("data_source"),
+        "history_quarters": target.get("history_quarters"),
         "raw": {"target": target, "competitors": comps},
         "pillars": {},
     }
@@ -128,6 +134,7 @@ def _valuation(target, comps):
             "EV/EBITDA": _peer_block("ev_ebitda", target, comps),
             "PEG": _peer_block("peg", target, comps),
             "P/B": _peer_block("pb", target, comps),
+            "FCF yield %": _peer_block("fcf_yield", target, comps),
         },
         # Note: lower multiple = "Strong" (attractive) in valuation.
         "rule_verdict": _verdict(score),
@@ -143,16 +150,24 @@ def _cash_flow(target, comps):
     conv = latest(target["ocf_to_ni"])
     if conv is not None:
         score += 1 if conv >= 1 else -1
+    # Heavy SBC relative to FCF quietly erodes real owner cash flow.
+    sbc_pct_fcf = target.get("sbc_pct_fcf")
+    if sbc_pct_fcf is not None:
+        score += -1 if sbc_pct_fcf > 25 else (1 if sbc_pct_fcf < 10 else 0)
     return {
         "title": "Cash Flow",
         "series": {
             "labels": target["quarters"],
             "FCF margin %": target["fcf_margin"],
+            "FCF margin ex-SBC %": target.get("fcf_ex_sbc_margin"),
             "OCF/Net income (x)": target["ocf_to_ni"],
         },
         "peers": {
             "FCF margin %": _peer_block("fcf_margin", target, comps),
+            "FCF margin ex-SBC %": _peer_block("fcf_ex_sbc_margin", target, comps),
         },
+        "sbc_pct_revenue": target.get("sbc_pct_revenue"),
+        "sbc_pct_fcf": sbc_pct_fcf,
         "rule_verdict": _verdict(score),
     }
 
@@ -169,15 +184,25 @@ def _financial_health(target, comps):
     peer_roe = _median([c.get("roe") for c in comps])
     if roe is not None and peer_roe is not None:
         score += 1 if roe > peer_roe else -1
+    # Cash-flow solvency: leverage and the ability to service it.
+    nde = target.get("net_debt_to_ebitda")
+    if nde is not None:
+        score += 1 if nde < 1 else (-1 if nde > 3 else 0)
+    cov = target.get("interest_coverage")
+    if cov is not None:
+        score += 1 if cov > 8 else (-1 if cov < 3 else 0)
     return {
         "title": "Financial Health",
         "peers": {
             "Debt/Equity": _peer_block("debt_to_equity", target, comps),
+            "Net debt/EBITDA": _peer_block("net_debt_to_ebitda", target, comps),
+            "Interest coverage": _peer_block("interest_coverage", target, comps),
             "Current ratio": _peer_block("current_ratio", target, comps),
-            "Quick ratio": _peer_block("quick_ratio", target, comps),
             "ROE %": _peer_block("roe", target, comps),
         },
         "net_cash": target.get("net_cash"),
+        "net_debt_to_ebitda": nde,
+        "interest_coverage": cov,
         "currency": target.get("currency"),
         "rule_verdict": _verdict(score),
     }

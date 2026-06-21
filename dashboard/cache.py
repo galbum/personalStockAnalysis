@@ -94,6 +94,14 @@ def get_or_fetch(ticker: str, fetch_fn, force: bool = False, ttl_hours: int = TT
     return data, False, fetched_at
 
 
+def recent_tickers(limit: int = 8) -> list:
+    """Most-recently fetched tickers (by cache file mtime), newest first."""
+    if not DATA_DIR.exists():
+        return []
+    files = sorted(DATA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p.stem for p in files[:limit]]
+
+
 def save_infographic(key: str, png_bytes: bytes) -> Path:
     _ensure_dirs()
     path = infographic_path(key)

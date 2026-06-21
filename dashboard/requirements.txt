@@ -5,4 +5,5 @@ anthropic>=0.39
 pandas>=2.0
 plotly>=5.20
 matplotlib>=3.7
+requests>=2.31
 python-dotenv>=1.0
