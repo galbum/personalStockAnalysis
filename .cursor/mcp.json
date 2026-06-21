@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "yahoo-finance": {
+      "command": "/Users/galbum/.local/bin/uvx",
+      "args": ["yfmcp@latest"]
+    },
+    "tradingview": {
+      "command": "/Users/galbum/.local/bin/uvx",
+      "args": ["--from", "tradingview-mcp-server", "tradingview-mcp"]
+    }
+  }
+}
