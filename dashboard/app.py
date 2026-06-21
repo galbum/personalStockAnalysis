@@ -10,6 +10,7 @@ dashboard-ux-design skill.
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -378,9 +379,14 @@ def run_infographic(primary, compare, api_key, model, use_llm, force, brand, han
         tickers = [primary] + ([compare] if compare else [])
         bundles, cache_notes = [], []
         with st.status("Building infographic…", expanded=True) as status:
-            for tk in tickers:
-                st.write(f"Fetching {tk} (checking cache)…")
-                data, from_cache, fetched_at = cache.get_or_fetch(tk, fetch_full, force=force)
+            st.write(f"Fetching {', '.join(tickers)} concurrently (checking cache)…")
+
+            def _one(tk):
+                return (tk,) + cache.get_or_fetch(tk, fetch_full, force=force)
+
+            with ThreadPoolExecutor(max_workers=min(4, len(tickers))) as ex:
+                results = list(ex.map(_one, tickers))
+            for tk, data, from_cache, fetched_at in results:
                 if not data.get("price") and not data.get("revenue"):
                     status.update(label="No data found", state="error")
                     st.error(f"Could not find usable data for '{tk}'. Check the symbol.")

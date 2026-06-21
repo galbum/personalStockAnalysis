@@ -10,7 +10,7 @@ import datetime as dt
 from statistics import median
 from typing import Optional
 
-from data_provider import fetch_company, latest
+from data_provider import fetch_many, latest
 
 PILLARS = ["profitability", "valuation", "cash_flow", "financial_health", "forward_signals"]
 
@@ -54,8 +54,9 @@ def _resolve_metric(company, key):
 
 
 def build_analysis(target_ticker: str, competitor_tickers: list) -> dict:
-    target = fetch_company(target_ticker)
-    comps = [fetch_company(t) for t in competitor_tickers if t]
+    # Fetch the target and all competitors concurrently.
+    bundles = fetch_many([target_ticker, *[t for t in competitor_tickers if t]])
+    target, comps = bundles[0], bundles[1:]
 
     out = {
         "as_of": dt.date.today().isoformat(),

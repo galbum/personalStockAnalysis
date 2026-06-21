@@ -9,6 +9,7 @@ never a fabricated value -- consistent with the skill's sourcing discipline.
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Optional
 
@@ -16,6 +17,37 @@ import pandas as pd
 import yfinance as yf
 
 MAX_QUARTERS = 12
+
+
+def _safe_snapshot(ticker: str) -> dict:
+    """TradingView snapshot, isolated so it can run in a worker thread."""
+    try:
+        import tv_provider
+
+        return tv_provider.fetch_snapshot(ticker) or {}
+    except Exception:
+        return {}
+
+
+def _safe_history(ticker: str) -> dict:
+    """FMP deep history, isolated so it can run in a worker thread."""
+    try:
+        import fmp_provider
+
+        return fmp_provider.fetch_history(ticker) or {}
+    except Exception:
+        return {}
+
+
+def fetch_many(tickers) -> list:
+    """Fetch several companies concurrently (independent network round-trips)."""
+    uniq = [t for t in tickers if t]
+    if not uniq:
+        return []
+    if len(uniq) == 1:
+        return [fetch_company(uniq[0])]
+    with ThreadPoolExecutor(max_workers=min(8, len(uniq))) as ex:
+        return list(ex.map(fetch_company, uniq))
 
 
 def _clean(value) -> Optional[float]:
@@ -103,6 +135,12 @@ def fetch_company(ticker: str) -> dict:
     """Fetch and assemble a company's metric bundle. Cached per process."""
     ticker = ticker.strip().upper()
     t = yf.Ticker(ticker)
+
+    # Kick off the independent TradingView + FMP network calls up front so they
+    # run concurrently with the (also network-bound) yfinance extraction below.
+    _ex = ThreadPoolExecutor(max_workers=2)
+    tv_future = _ex.submit(_safe_snapshot, ticker)
+    fmp_future = _ex.submit(_safe_history, ticker)
 
     info = {}
     try:
@@ -374,13 +412,8 @@ def fetch_company(ticker: str) -> dict:
     }
 
     # TradingView is the primary source for the current snapshot + valuation.
-    # yfinance still supplies the 8-quarter series used by the charts.
-    try:
-        import tv_provider
-
-        snap = tv_provider.fetch_snapshot(ticker)
-    except Exception:
-        snap = {}
+    # yfinance still supplies the quarterly series used by the charts.
+    snap = tv_future.result()
     if snap:
         for key in ("name", "sector", "industry", "price", "market_cap", "pe", "ps",
                     "ev_ebitda", "pb", "peg", "dividend_yield", "recommendation"):
@@ -391,13 +424,8 @@ def fetch_company(ticker: str) -> dict:
         result["data_source"] = "tradingview+yfinance"
 
     # ---- Optional deep history (FMP) overlays the short yfinance series ----
-    hist = {}
-    try:
-        import fmp_provider
-
-        hist = fmp_provider.fetch_history(ticker)
-    except Exception:
-        hist = {}
+    hist = fmp_future.result()
+    _ex.shutdown(wait=False)
     if hist:
         for key in ("quarters", "revenue", "rev_yoy", "gross_margin", "op_margin",
                     "net_margin", "ebitda", "ebitda_margin", "net_income", "ocf",
