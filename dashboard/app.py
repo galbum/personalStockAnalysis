@@ -13,7 +13,18 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from analysis import PILLARS, build_analysis
+import cache
+from data_provider import fetch_company, fetch_price_performance
+from infographic import build_infographic
+from infographic_data import build_spec
 import llm
+
+
+def fetch_full(ticker: str) -> dict:
+    """Combined, JSON-serialisable bundle used for caching + infographics."""
+    data = fetch_company(ticker)
+    data["price_perf"] = fetch_price_performance(ticker)
+    return data
 
 load_dotenv()
 
@@ -201,41 +212,9 @@ def render(analysis: dict, narrative: dict | None):
     )
 
 
-def main():
-    st.title(":chart_with_upwards_trend: Fundamental Analysis Dashboard")
-
-    with st.sidebar:
-        st.header("Settings")
-        api_key = st.text_input(
-            "Anthropic API key", value=llm.get_api_key() or "", type="password",
-            help="Needed for the analyst narrative & deck prompt. Leave blank for data-only mode.",
-        )
-        model = st.text_input(
-            "Claude model", value=os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
-            help="Use a model your key supports.",
-        )
-        use_llm = st.toggle("Generate analyst narrative (LLM)", value=bool(api_key))
-        st.divider()
-        comp_override = st.text_input(
-            "Competitors (optional)", placeholder="e.g. MSFT, GOOGL",
-            help="Comma-separated tickers. Leave blank to let Claude pick.",
-        )
-        st.caption("Data: yfinance (free). Narrative: your Anthropic key.")
-
-    ticker = st.text_input("Ticker or symbol", placeholder="e.g. NVDA").strip().upper()
-    run = st.button("Analyze", type="primary", disabled=not ticker)
-
-    if not run:
-        st.info("Enter a ticker and click **Analyze**. The dashboard pulls real "
-                "fundamentals, builds the five pillars, and (with an Anthropic key) "
-                "writes the analyst thesis + a ready-to-paste Claude Design deck prompt.")
-        return
-
-    manual_comps = [c.strip().upper() for c in comp_override.split(",") if c.strip()]
-
+def run_research(ticker, manual_comps, api_key, model, use_llm):
     try:
         with st.spinner("Resolving company & competitors..."):
-            from data_provider import fetch_company
             target = fetch_company(ticker)
             if not target.get("price") and not target.get("revenue"):
                 st.error(f"Could not find usable data for '{ticker}'. Check the symbol.")
@@ -262,6 +241,105 @@ def main():
     except Exception as e:  # noqa: BLE001
         st.error(f"Analysis failed: {e}")
         st.exception(e)
+
+
+def run_infographic(primary, compare, api_key, model, use_llm, force, brand, handle, period):
+    try:
+        tickers = [primary] + ([compare] if compare else [])
+        bundles = []
+        cache_notes = []
+        for tk in tickers:
+            with st.spinner(f"Fetching {tk} (checking cache)..."):
+                data, from_cache, fetched_at = cache.get_or_fetch(tk, fetch_full, force=force)
+            if not data.get("price") and not data.get("revenue"):
+                st.error(f"Could not find usable data for '{tk}'. Check the symbol.")
+                return
+            bundles.append(data)
+            when = (fetched_at or "")[:19].replace("T", " ")
+            cache_notes.append(f"**{tk}**: {'cached' if from_cache else 'fetched'} ({when} UTC)")
+
+        # Auto-pick a comparison ticker if only one was given and LLM is available.
+        if len(bundles) == 1 and not compare and use_llm and api_key:
+            with st.spinner("Picking a competitor via Claude..."):
+                try:
+                    picks = llm.resolve_competitors(bundles[0], model, api_key)
+                    if picks:
+                        data, from_cache, fetched_at = cache.get_or_fetch(picks[0], fetch_full, force=force)
+                        bundles.append(data)
+                        when = (fetched_at or "")[:19].replace("T", " ")
+                        cache_notes.append(f"**{picks[0]}** (auto): {'cached' if from_cache else 'fetched'} ({when} UTC)")
+                except Exception:
+                    pass
+
+        with st.spinner("Rendering infographic..."):
+            spec = build_spec(bundles, period=period, brand=brand or "Gabi Album",
+                              handle=handle or "")
+            key = "_".join(b.get("ticker", "X") for b in bundles)
+            out_path = str(cache.infographic_path(key))
+            build_infographic(spec, out_path)
+
+        st.image(out_path, use_container_width=True)
+        st.caption(" · ".join(cache_notes))
+        with open(out_path, "rb") as fh:
+            st.download_button("Download infographic (PNG)", fh.read(),
+                               file_name=f"{key}_infographic.png", mime="image/png")
+        st.caption("Educational research, not investment advice. Data via yfinance; "
+                   "free quarterly history is limited, so some panels may show few points.")
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Infographic failed: {e}")
+        st.exception(e)
+
+
+def main():
+    st.title(":chart_with_upwards_trend: Stock Analysis Dashboard")
+
+    with st.sidebar:
+        st.header("Settings")
+        api_key = st.text_input(
+            "Anthropic API key", value=llm.get_api_key() or "", type="password",
+            help="Needed for the analyst narrative & deck prompt, and competitor auto-pick.",
+        )
+        model = st.text_input(
+            "Claude model", value=os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
+            help="Use a model your key supports.",
+        )
+        use_llm = st.toggle("Use Claude (narrative / auto-pick)", value=bool(api_key))
+        st.divider()
+        st.subheader("Infographic branding")
+        brand = st.text_input("Brand footer", value="Gabi Album")
+        handle = st.text_input("Handle / period (right footer)", value="")
+        st.divider()
+        st.caption("Data: yfinance (free, cached locally for 24h). Narrative: your Anthropic key.")
+
+    mode = st.radio("Mode", ["Research (single ticker)", "Infographic (compare tickers)"],
+                    horizontal=True)
+
+    if mode.startswith("Research"):
+        comp_override = st.text_input(
+            "Competitors (optional)", placeholder="e.g. MSFT, GOOGL",
+            help="Comma-separated tickers. Leave blank to let Claude pick.",
+        )
+        ticker = st.text_input("Ticker or symbol", placeholder="e.g. NVDA").strip().upper()
+        run = st.button("Analyze", type="primary", disabled=not ticker)
+        if not run:
+            st.info("Pulls real fundamentals, builds the five pillars, and (with an "
+                    "Anthropic key) writes the analyst thesis + a Claude Design deck prompt.")
+            return
+        manual_comps = [c.strip().upper() for c in comp_override.split(",") if c.strip()]
+        run_research(ticker, manual_comps, api_key, model, use_llm)
+    else:
+        c1, c2 = st.columns(2)
+        primary = c1.text_input("Primary ticker", placeholder="e.g. ORCL").strip().upper()
+        compare = c2.text_input("Compare with (optional)", placeholder="e.g. MSFT").strip().upper()
+        period = st.text_input("Period label (footer)", placeholder="e.g. Q2'26").strip()
+        force = st.checkbox("Force refresh (ignore cache)", value=False)
+        run = st.button("Generate infographic", type="primary", disabled=not primary)
+        if not run:
+            st.info("Enter one ticker for a single-company infographic, or two for a "
+                    "head-to-head comparison (like the reference). Leave the second blank "
+                    "and Claude will pick a competitor. Data is cached locally for 24h.")
+            return
+        run_infographic(primary, compare, api_key, model, use_llm, force, brand, handle, period)
 
 
 if __name__ == "__main__":

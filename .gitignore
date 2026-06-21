@@ -17,6 +17,9 @@ venv/
 __pycache__/
 *.pyc
 
+# Dashboard local cache (fetched data + generated infographics)
+dashboard/cache/
+
 # Build output
 dist/
 build/

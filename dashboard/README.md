@@ -1,18 +1,41 @@
-# Fundamental Analysis Dashboard
+# Stock Analysis Dashboard
 
-An interactive Streamlit dashboard for the [`fundamental-analysis`](../skills/fundamental-analysis)
-skill. Enter a ticker, click **Analyze**, and it:
+An interactive Streamlit dashboard with two modes.
+
+### Research (single ticker)
+
+Enter a ticker, click **Analyze**, and it:
 
 1. Pulls **real fundamentals** from yfinance for the company and two competitors
-2. Computes the skill's **five pillars** (Profitability, Valuation, Cash Flow,
-   Financial Health, Forward Signals) with 8-quarter trends and peer comparisons
+2. Computes the [`fundamental-analysis`](../skills/fundamental-analysis) skill's
+   **five pillars** (Profitability, Valuation, Cash Flow, Financial Health,
+   Forward Signals) with trends and peer comparisons
 3. (Optional) Has **Claude** read the skill's own instruction files and the real
    data, then write the analyst interpretation, verdicts, investment thesis, and a
    ready-to-paste **Claude Design deck prompt**
 
 It's a **hybrid engine**: real numbers from market data + analyst-grade narrative
-from the LLM. Without an Anthropic key it still runs in **data-only mode** (all
-charts, tables, and rule-based verdicts; no narrative or deck prompt).
+from the LLM. Without an Anthropic key it still runs in **data-only mode**.
+
+### Infographic (compare)
+
+Enter one ticker for a single-company infographic, or two for a **head-to-head**
+comparison (dark, branded PNG in the style of a "$A x $B" equity comparison):
+3 top stats (Dividend Yield, Market Cap, Inst. Ownership) + 6 line-chart panels
+(Revenue Growth, Free Cash Flow, Total Debt, Capital Expenditure Growth, Stock
+Performance, Net Profit Margin). Leave the second ticker blank and Claude picks a
+competitor. Generate it standalone via the [`stock-infographic`](../.cursor/skills/stock-infographic)
+skill too.
+
+### Caching
+
+Fetched data is cached locally and reused for **24 hours**:
+
+- `cache/data/<TICKER>.json` — metrics + `fetched_at`
+- `cache/infographics/<KEY>.png` — generated images
+
+Re-requesting a ticker reuses the cache unless it's older than 24h or you tick
+**Force refresh**.
 
 ## Setup
 
@@ -49,7 +72,9 @@ competitors in the sidebar (otherwise Claude picks two), and click **Analyze**.
 | Data | `data_provider.py` | yfinance fetch + metric extraction (defensive, never fabricates) |
 | Analysis | `analysis.py` | Builds the five pillars + rule-based preliminary verdicts |
 | Narrative | `llm.py` | Sends real data + skill files to Claude; returns thesis + deck prompt |
-| UI | `app.py` | Streamlit dashboard: scorecard, trend charts, peer tables, thesis, deck prompt |
+| Infographic | `infographic.py`, `infographic_data.py` | Assembles the spec + renders the PNG (matplotlib) |
+| Cache | `cache.py` | Local JSON/PNG cache with 24h TTL + force refresh |
+| UI | `app.py` | Streamlit dashboard: research mode + infographic mode |
 
 ## Notes & limits
 
